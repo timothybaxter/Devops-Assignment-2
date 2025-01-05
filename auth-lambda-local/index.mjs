@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 // Add this near the start of your handler function
 console.log('Auth Lambda function executed - PIPELINE TEST');
-console.log('Testing automatic deployment via webhook - test 2' + new Date().toISOString());
+console.log('Testing automatic deployment via webhook - test 3' + new Date().toISOString());
 
 // User Schema
 const userSchema = new mongoose.Schema({
@@ -28,17 +28,22 @@ const User = mongoose.model('User', userSchema);
 let cachedDb = null;
 
 async function connectToDatabase() {
-  if (cachedDb) {
+  try {
+    if (cachedDb) {
+      return cachedDb;
+    }
+
+    const connection = await mongoose.connect(process.env.MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+
+    cachedDb = connection;
     return cachedDb;
+  } catch (error) {
+    console.error('MongoDB connection error:', error);
+    throw error; // Re-throw to handle in the main handler
   }
-
-  const connection = await mongoose.connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  });
-
-  cachedDb = connection;
-  return cachedDb;
 }
 
 // Lambda handler
