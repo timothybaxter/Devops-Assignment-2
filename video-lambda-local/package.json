@@ -1,0 +1,17 @@
+{
+  "name": "video-lambda-local",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "mongodb": "^6.12.0",
+    "aws-sdk": "^2.1531.0",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
