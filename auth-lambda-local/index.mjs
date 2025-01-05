@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 // Add this near the start of your handler function
 console.log('Auth Lambda function executed - PIPELINE TEST');
+console.log('Testing automatic deployment via webhook - ' + new Date().toISOString());
 
 // User Schema
 const userSchema = new mongoose.Schema({
