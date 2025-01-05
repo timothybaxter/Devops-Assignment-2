@@ -2,6 +2,8 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+// Add this near the start of your handler function
+console.log('Auth Lambda function executed - PIPELINE TEST');
 
 // User Schema
 const userSchema = new mongoose.Schema({
