@@ -1,156 +1,188 @@
 const AWS = require('aws-sdk');
-const { MongoClient } = require('mongodb');
-const jwt = require('jsonwebtoken');
+const { MongoClient, ObjectId } = require('mongodb');
+const { getVideoDurationInSeconds } = require('get-video-duration');
 
-// Initialize AWS services
 const s3 = new AWS.S3();
-const cloudFront = new AWS.CloudFront();
-const BUCKET_NAME = process.env.S3_BUCKET_NAME;
-const CLOUDFRONT_DISTRIBUTION_ID = process.env.CLOUDFRONT_DISTRIBUTION_ID;
-const CLOUDFRONT_DOMAIN = process.env.CLOUDFRONT_DOMAIN;
+const MONGODB_URI = process.env.MONGODB_URI;
+const DB_NAME = 'videos-db';
 
-// MongoDB connection
 let cachedDb = null;
 
 async function connectToDatabase() {
-    if (cachedDb) {
-        return cachedDb;
-    }
-    const client = await MongoClient.connect(process.env.MONGODB_URI);
-    const db = client.db('videos-db');
-    cachedDb = db;
-    return db;
-}
+  if (cachedDb) {
+    return cachedDb;
+  }
 
-// Verify JWT token
-const verifyToken = (token) => {
-    try {
-        return jwt.verify(token, process.env.JWT_SECRET);
-    } catch (error) {
-        throw new Error('Invalid token');
-    }
-};
-
-// Generate signed URL for video upload
-async function generateUploadUrl(key) {
-    const params = {
-        Bucket: BUCKET_NAME,
-        Key: key,
-        Expires: 3600, // URL expires in 1 hour
-        ContentType: 'video/*'
-    };
-    return await s3.getSignedUrlPromise('putObject', params);
-}
-
-// Generate CloudFront signed URL for video streaming
-async function generateStreamUrl(key) {
-    const url = `https://${CLOUDFRONT_DOMAIN}/${key}`;
-    return url;
+  const client = await MongoClient.connect(MONGODB_URI);
+  cachedDb = client.db(DB_NAME);
+  return cachedDb;
 }
 
 exports.handler = async (event) => {
-    try {
-        // Extract authorization header
-        const authHeader = event.headers.Authorization;
-        if (!authHeader) {
-            return {
-                statusCode: 401,
-                body: JSON.stringify({ message: 'No authorization token provided' })
-            };
-        }
+  try {
+    const db = await connectToDatabase();
+    const videosCollection = db.collection('videos');
 
-        // Verify JWT token
-        const token = authHeader.split(' ')[1];
-        const decoded = verifyToken(token);
-
-        const db = await connectToDatabase();
-        const videosCollection = db.collection('videos');
-
-        // Handle different HTTP methods
-        switch (event.httpMethod) {
-            case 'POST': {
-                // Handle video upload request
-                const body = JSON.parse(event.body);
-                const { title, description, fileName } = body;
-                
-                // Generate unique key for S3
-                const key = `videos/${decoded.userId}/${Date.now()}-${fileName}`;
-                
-                // Generate upload URL
-                const uploadUrl = await generateUploadUrl(key);
-                
-                // Store video metadata in MongoDB
-                const video = {
-                    userId: decoded.userId,
-                    title,
-                    description,
-                    key,
-                    status: 'pending',
-                    createdAt: new Date(),
-                    updatedAt: new Date()
-                };
-                
-                await videosCollection.insertOne(video);
-                
-                return {
-                    statusCode: 200,
-                    body: JSON.stringify({
-                        uploadUrl,
-                        videoId: video._id
-                    })
-                };
-            }
-
-            case 'GET': {
-                if (event.pathParameters && event.pathParameters.id) {
-                    // Get single video
-                    const video = await videosCollection.findOne({
-                        _id: event.pathParameters.id,
-                        userId: decoded.userId
-                    });
-                    
-                    if (!video) {
-                        return {
-                            statusCode: 404,
-                            body: JSON.stringify({ message: 'Video not found' })
-                        };
-                    }
-                    
-                    // Generate streaming URL
-                    const streamUrl = await generateStreamUrl(video.key);
-                    
-                    return {
-                        statusCode: 200,
-                        body: JSON.stringify({
-                            ...video,
-                            streamUrl
-                        })
-                    };
-                } else {
-                    // List all videos for user
-                    const videos = await videosCollection
-                        .find({ userId: decoded.userId })
-                        .sort({ createdAt: -1 })
-                        .toArray();
-                    
-                    return {
-                        statusCode: 200,
-                        body: JSON.stringify(videos)
-                    };
-                }
-            }
-
-            default:
-                return {
-                    statusCode: 405,
-                    body: JSON.stringify({ message: 'Method not allowed' })
-                };
-        }
-    } catch (error) {
-        console.error('Error:', error);
-        return {
-            statusCode: 500,
-            body: JSON.stringify({ message: 'Internal server error' })
-        };
+    // Handle different event types
+    if (event.Records) {
+      // S3 event trigger
+      return await handleS3Event(event, videosCollection);
+    } else if (event.httpMethod) {
+      // API Gateway event
+      return await handleAPIRequest(event, videosCollection);
     }
+
+  } catch (error) {
+    console.error('Error:', error);
+    return {
+      statusCode: 500,
+      headers: {
+        'Access-Control-Allow-Origin': '*'
+      },
+      body: JSON.stringify({ error: 'Internal server error' })
+    };
+  }
 };
+
+async function handleS3Event(event, collection) {
+  for (const record of event.Records) {
+    if (!record.eventName.startsWith('ObjectCreated:')) continue;
+
+    const bucket = record.s3.bucket.name;
+    const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
+
+    // Get S3 object metadata
+    const s3Object = await s3.headObject({
+      Bucket: bucket,
+      Key: key
+    }).promise();
+
+    // Generate signed URL (24 hour expiry)
+    const url = s3.getSignedUrl('getObject', {
+      Bucket: bucket,
+      Key: key,
+      Expires: 86400
+    });
+
+    // Prepare metadata document
+    const metadata = {
+      fileName: key.split('/').pop(),
+      s3Key: key,
+      s3Bucket: bucket,
+      uploadDate: new Date(),
+      contentType: s3Object.ContentType,
+      size: s3Object.ContentLength,
+      url: url,
+      status: 'processing'
+    };
+
+    try {
+      // Get video duration
+      const videoStream = s3.getObject({
+        Bucket: bucket,
+        Key: key
+      }).createReadStream();
+      
+      const duration = await getVideoDurationInSeconds(videoStream);
+      metadata.duration = duration;
+      metadata.status = 'ready';
+    } catch (error) {
+      console.error('Error getting video duration:', error);
+      metadata.status = 'error';
+    }
+
+    await collection.insertOne(metadata);
+  }
+
+  return {
+    statusCode: 200,
+    body: JSON.stringify({ message: 'Metadata processing completed' })
+  };
+}
+
+async function handleAPIRequest(event, collection) {
+  switch (event.httpMethod) {
+    case 'GET':
+      if (event.path === '/videos') {
+        // List all videos
+        const videos = await collection.find({ status: 'ready' })
+          .sort({ uploadDate: -1 })
+          .toArray();
+        
+        return {
+          statusCode: 200,
+          headers: {
+            'Access-Control-Allow-Origin': '*'
+          },
+          body: JSON.stringify(videos)
+        };
+      } else if (event.pathParameters?.videoId) {
+        // Get specific video
+        const video = await collection.findOne({
+          _id: new ObjectId(event.pathParameters.videoId)
+        });
+        
+        if (!video) {
+          return {
+            statusCode: 404,
+            headers: {
+              'Access-Control-Allow-Origin': '*'
+            },
+            body: JSON.stringify({ error: 'Video not found' })
+          };
+        }
+
+        return {
+          statusCode: 200,
+          headers: {
+            'Access-Control-Allow-Origin': '*'
+          },
+          body: JSON.stringify(video)
+        };
+      }
+      break;
+
+    case 'DELETE':
+      if (event.pathParameters?.videoId) {
+        const video = await collection.findOne({
+          _id: new ObjectId(event.pathParameters.videoId)
+        });
+        
+        if (!video) {
+          return {
+            statusCode: 404,
+            headers: {
+              'Access-Control-Allow-Origin': '*'
+            },
+            body: JSON.stringify({ error: 'Video not found' })
+          };
+        }
+
+        // Delete from S3
+        await s3.deleteObject({
+          Bucket: video.s3Bucket,
+          Key: video.s3Key
+        }).promise();
+
+        // Delete from MongoDB
+        await collection.deleteOne({ _id: new ObjectId(event.pathParameters.videoId) });
+
+        return {
+          statusCode: 200,
+          headers: {
+            'Access-Control-Allow-Origin': '*'
+          },
+          body: JSON.stringify({ message: 'Video deleted successfully' })
+        };
+      }
+      break;
+  }
+
+  return {
+    statusCode: 400,
+    headers: {
+      'Access-Control-Allow-Origin': '*'
+    },
+    body: JSON.stringify({ error: 'Invalid request' })
+  };
+}
