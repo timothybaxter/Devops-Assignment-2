@@ -1,7 +1,6 @@
 import { S3Client, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { MongoClient, ObjectId } from 'mongodb';
-import { getVideoDurationInSeconds } from 'get-video-duration';
 
 // Initialize S3 client with hardcoded region
 const s3Client = new S3Client({
@@ -89,23 +88,10 @@ async function handleS3Event(event, collection) {
         contentType: s3Object.ContentType,
         size: s3Object.ContentLength,
         url: url,
-        status: 'processing'
+        status: 'ready'  // Set as ready since we're skipping duration
       };
 
       console.log('Created metadata:', metadata);
-
-      try {
-        console.log('Getting video duration...');
-        const getResponse = await s3Client.send(getCommand);
-        const videoStream = getResponse.Body;
-        const duration = await getVideoDurationInSeconds(videoStream);
-        metadata.duration = duration;
-        metadata.status = 'ready';
-      } catch (error) {
-        console.error('Error getting video duration:', error);
-        metadata.status = 'error';
-      }
-
       console.log('Saving to MongoDB...');
       await collection.insertOne(metadata);
       console.log('Metadata saved to MongoDB');
