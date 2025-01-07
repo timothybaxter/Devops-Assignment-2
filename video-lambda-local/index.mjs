@@ -3,6 +3,12 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { MongoClient, ObjectId } from 'mongodb';
 import { getVideoDurationInSeconds } from 'get-video-duration';
 
+// Initialize S3 client with hardcoded region
+const s3Client = new S3Client({
+  region: 'us-east-1',
+  forcePathStyle: true
+});
+
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
 
@@ -21,21 +27,12 @@ async function connectToDatabase() {
 export const handler = async (event) => {
   try {
     console.log('Event received:', JSON.stringify(event, null, 2));
-    
-    // Get region from the event
-    const region = event.Records[0].awsRegion;
-    console.log('Using region from event:', region);
-
-    // Initialize S3 client with region from event
-    const s3Client = new S3Client({
-      region: region
-    });
 
     const db = await connectToDatabase();
     const videosCollection = db.collection('videos');
 
     if (event.Records) {
-      return await handleS3Event(event, videosCollection, s3Client);
+      return await handleS3Event(event, videosCollection);
     } else if (event.httpMethod) {
       return await handleAPIRequest(event, videosCollection);
     }
@@ -52,7 +49,7 @@ export const handler = async (event) => {
   }
 };
 
-async function handleS3Event(event, collection, s3Client) {
+async function handleS3Event(event, collection) {
   for (const record of event.Records) {
     if (!record.eventName.startsWith('ObjectCreated:')) continue;
 
@@ -78,7 +75,10 @@ async function handleS3Event(event, collection, s3Client) {
       });
 
       console.log('Generating signed URL...');
-      const url = await getSignedUrl(s3Client, getCommand, { expiresIn: 86400 });
+      const url = await getSignedUrl(s3Client, getCommand, { 
+        expiresIn: 86400,
+        signableHeaders: new Set(['host'])
+      });
 
       // Prepare metadata document
       const metadata = {
@@ -96,7 +96,8 @@ async function handleS3Event(event, collection, s3Client) {
 
       try {
         console.log('Getting video duration...');
-        const videoStream = (await s3Client.send(getCommand)).Body;
+        const getResponse = await s3Client.send(getCommand);
+        const videoStream = getResponse.Body;
         const duration = await getVideoDurationInSeconds(videoStream);
         metadata.duration = duration;
         metadata.status = 'ready';
