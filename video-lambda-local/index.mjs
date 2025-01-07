@@ -1,11 +1,11 @@
-import { S3 } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { MongoClient, ObjectId } from 'mongodb';
 import { getVideoDurationInSeconds } from 'get-video-duration';
 
 // Initialize S3 client with region
-const s3 = new S3({
-  region: 'us-east-1'  // Added region
+const s3Client = new S3Client({
+  region: 'us-east-1'
 });
 
 const MONGODB_URI = process.env.MONGODB_URI;
@@ -29,12 +29,9 @@ export const handler = async (event) => {
     const db = await connectToDatabase();
     const videosCollection = db.collection('videos');
 
-    // Handle different event types
     if (event.Records) {
-      // S3 event trigger
       return await handleS3Event(event, videosCollection);
     } else if (event.httpMethod) {
-      // API Gateway event
       return await handleAPIRequest(event, videosCollection);
     }
 
@@ -61,19 +58,20 @@ async function handleS3Event(event, collection) {
 
     try {
       // Get S3 object metadata
-      const s3Object = await s3.headObject({
+      const headCommand = new HeadObjectCommand({
+        Bucket: bucket,
+        Key: key
+      });
+      const s3Object = await s3Client.send(headCommand);
+
+      // Create GetObject command for signed URL
+      const getCommand = new GetObjectCommand({
         Bucket: bucket,
         Key: key
       });
 
-      // Create GetObject command for signed URL
-      const getObjectCommand = {
-        Bucket: bucket,
-        Key: key
-      };
-
       // Generate signed URL (24 hour expiry)
-      const url = await getSignedUrl(s3, getObjectCommand, { expiresIn: 86400 });
+      const url = await getSignedUrl(s3Client, getCommand, { expiresIn: 86400 });
 
       // Prepare metadata document
       const metadata = {
@@ -90,12 +88,7 @@ async function handleS3Event(event, collection) {
       console.log('Created metadata:', metadata);
 
       try {
-        // Get video duration
-        const videoStream = await s3.getObject({
-          Bucket: bucket,
-          Key: key
-        }).createReadStream();
-        
+        const videoStream = (await s3Client.send(getCommand)).Body;
         const duration = await getVideoDurationInSeconds(videoStream);
         metadata.duration = duration;
         metadata.status = 'ready';
@@ -106,23 +99,23 @@ async function handleS3Event(event, collection) {
 
       await collection.insertOne(metadata);
       console.log('Metadata saved to MongoDB');
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ message: 'Metadata processing completed successfully' })
+      };
+
     } catch (error) {
       console.error('Error processing video:', error);
       throw error;
     }
   }
-
-  return {
-    statusCode: 200,
-    body: JSON.stringify({ message: 'Metadata processing completed' })
-  };
 }
 
 async function handleAPIRequest(event, collection) {
   switch (event.httpMethod) {
     case 'GET':
       if (event.path === '/videos') {
-        // List all videos
         const videos = await collection.find({ status: 'ready' })
           .sort({ uploadDate: -1 })
           .toArray();
@@ -135,7 +128,6 @@ async function handleAPIRequest(event, collection) {
           body: JSON.stringify(videos)
         };
       } else if (event.pathParameters?.videoId) {
-        // Get specific video
         const video = await collection.findOne({
           _id: new ObjectId(event.pathParameters.videoId)
         });
