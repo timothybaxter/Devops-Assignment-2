@@ -1,8 +1,8 @@
-const AWS = require('aws-sdk');
-const { MongoClient, ObjectId } = require('mongodb');
-const { getVideoDurationInSeconds } = require('get-video-duration');
+import { S3 } from '@aws-sdk/client-s3';
+import { MongoClient, ObjectId } from 'mongodb';
+import { getVideoDurationInSeconds } from 'get-video-duration';
 
-const s3 = new AWS.S3();
+const s3 = new S3();
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
 
@@ -18,7 +18,7 @@ async function connectToDatabase() {
   return cachedDb;
 }
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   try {
     const db = await connectToDatabase();
     const videosCollection = db.collection('videos');
@@ -55,10 +55,10 @@ async function handleS3Event(event, collection) {
     const s3Object = await s3.headObject({
       Bucket: bucket,
       Key: key
-    }).promise();
+    });
 
     // Generate signed URL (24 hour expiry)
-    const url = s3.getSignedUrl('getObject', {
+    const url = await s3.getSignedUrl('getObject', {
       Bucket: bucket,
       Key: key,
       Expires: 86400
@@ -162,7 +162,7 @@ async function handleAPIRequest(event, collection) {
         await s3.deleteObject({
           Bucket: video.s3Bucket,
           Key: video.s3Key
-        }).promise();
+        });
 
         // Delete from MongoDB
         await collection.deleteOne({ _id: new ObjectId(event.pathParameters.videoId) });
