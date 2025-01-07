@@ -2,7 +2,6 @@ import { S3Client, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { MongoClient, ObjectId } from 'mongodb';
 
-// Initialize S3 client with hardcoded region
 const s3Client = new S3Client({
   region: 'us-east-1',
   forcePathStyle: true
@@ -31,7 +30,18 @@ export const handler = async (event) => {
     const videosCollection = db.collection('videos');
 
     if (event.Records) {
-      return await handleS3Event(event, videosCollection);
+      // Handle S3 events (both create and delete)
+      for (const record of event.Records) {
+        if (record.eventName.startsWith('ObjectCreated:')) {
+          await handleS3Create(record, videosCollection);
+        } else if (record.eventName.startsWith('ObjectRemoved:')) {
+          await handleS3Delete(record, videosCollection);
+        }
+      }
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ message: 'Event processed successfully' })
+      };
     } else if (event.httpMethod) {
       return await handleAPIRequest(event, videosCollection);
     }
@@ -48,62 +58,70 @@ export const handler = async (event) => {
   }
 };
 
-async function handleS3Event(event, collection) {
-  for (const record of event.Records) {
-    if (!record.eventName.startsWith('ObjectCreated:')) continue;
+async function handleS3Create(record, collection) {
+  const bucket = record.s3.bucket.name;
+  const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
 
-    const bucket = record.s3.bucket.name;
-    const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
+  console.log('Processing new video:', { bucket, key });
 
-    console.log('Processing new video:', { bucket, key });
+  try {
+    // Get S3 object metadata
+    const headCommand = new HeadObjectCommand({
+      Bucket: bucket,
+      Key: key
+    });
 
-    try {
-      // Get S3 object metadata
-      const headCommand = new HeadObjectCommand({
-        Bucket: bucket,
-        Key: key
-      });
+    console.log('Getting object metadata...');
+    const s3Object = await s3Client.send(headCommand);
 
-      console.log('Getting object metadata...');
-      const s3Object = await s3Client.send(headCommand);
+    // Create GetObject command for signed URL
+    const getCommand = new GetObjectCommand({
+      Bucket: bucket,
+      Key: key
+    });
 
-      // Create GetObject command for signed URL
-      const getCommand = new GetObjectCommand({
-        Bucket: bucket,
-        Key: key
-      });
+    console.log('Generating signed URL...');
+    const url = await getSignedUrl(s3Client, getCommand, { 
+      expiresIn: 86400,
+      signableHeaders: new Set(['host'])
+    });
 
-      console.log('Generating signed URL...');
-      const url = await getSignedUrl(s3Client, getCommand, { 
-        expiresIn: 86400,
-        signableHeaders: new Set(['host'])
-      });
+    // Prepare metadata document
+    const metadata = {
+      fileName: key.split('/').pop(),
+      s3Key: key,
+      s3Bucket: bucket,
+      uploadDate: new Date(),
+      contentType: s3Object.ContentType,
+      size: s3Object.ContentLength,
+      url: url,
+      status: 'ready'
+    };
 
-      // Prepare metadata document
-      const metadata = {
-        fileName: key.split('/').pop(),
-        s3Key: key,
-        s3Bucket: bucket,
-        uploadDate: new Date(),
-        contentType: s3Object.ContentType,
-        size: s3Object.ContentLength,
-        url: url,
-        status: 'ready'  // Set as ready since we're skipping duration
-      };
+    console.log('Created metadata:', metadata);
+    console.log('Saving to MongoDB...');
+    await collection.insertOne(metadata);
+    console.log('Metadata saved to MongoDB');
 
-      console.log('Created metadata:', metadata);
-      console.log('Saving to MongoDB...');
-      await collection.insertOne(metadata);
-      console.log('Metadata saved to MongoDB');
+  } catch (error) {
+    console.error('Error processing video:', error);
+    throw error;
+  }
+}
 
-      return {
-        statusCode: 200,
-        body: JSON.stringify({ message: 'Metadata processing completed successfully' })
-      };
+async function handleS3Delete(record, collection) {
+  const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
+  console.log('Processing video deletion:', key);
 
-    } catch (error) {
-      console.error('Error processing video:', error);
-      throw error;
+  try {
+    const result = await collection.deleteOne({ s3Key: key });
+    if (result.deletedCount > 0) {
+      console.log('Metadata deleted from MongoDB for:', key);
+    } else {
+      console.log('No metadata found to delete for:', key);
     }
+  } catch (error) {
+    console.error('Error deleting metadata:', error);
+    throw error;
   }
 }
