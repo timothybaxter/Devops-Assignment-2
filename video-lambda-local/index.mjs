@@ -1,4 +1,5 @@
 import { S3 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { MongoClient, ObjectId } from 'mongodb';
 import { getVideoDurationInSeconds } from 'get-video-duration';
 
@@ -20,6 +21,7 @@ async function connectToDatabase() {
 
 export const handler = async (event) => {
   try {
+    console.log('Event received:', JSON.stringify(event, null, 2));
     const db = await connectToDatabase();
     const videosCollection = db.collection('videos');
 
@@ -39,7 +41,7 @@ export const handler = async (event) => {
       headers: {
         'Access-Control-Allow-Origin': '*'
       },
-      body: JSON.stringify({ error: 'Internal server error' })
+      body: JSON.stringify({ error: 'Internal server error', details: error.message })
     };
   }
 };
@@ -51,47 +53,59 @@ async function handleS3Event(event, collection) {
     const bucket = record.s3.bucket.name;
     const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
 
-    // Get S3 object metadata
-    const s3Object = await s3.headObject({
-      Bucket: bucket,
-      Key: key
-    });
-
-    // Generate signed URL (24 hour expiry)
-    const url = await s3.getSignedUrl('getObject', {
-      Bucket: bucket,
-      Key: key,
-      Expires: 86400
-    });
-
-    // Prepare metadata document
-    const metadata = {
-      fileName: key.split('/').pop(),
-      s3Key: key,
-      s3Bucket: bucket,
-      uploadDate: new Date(),
-      contentType: s3Object.ContentType,
-      size: s3Object.ContentLength,
-      url: url,
-      status: 'processing'
-    };
+    console.log('Processing new video:', { bucket, key });
 
     try {
-      // Get video duration
-      const videoStream = s3.getObject({
+      // Get S3 object metadata
+      const s3Object = await s3.headObject({
         Bucket: bucket,
         Key: key
-      }).createReadStream();
-      
-      const duration = await getVideoDurationInSeconds(videoStream);
-      metadata.duration = duration;
-      metadata.status = 'ready';
-    } catch (error) {
-      console.error('Error getting video duration:', error);
-      metadata.status = 'error';
-    }
+      });
 
-    await collection.insertOne(metadata);
+      // Create GetObject command for signed URL
+      const getObjectCommand = {
+        Bucket: bucket,
+        Key: key
+      };
+
+      // Generate signed URL (24 hour expiry)
+      const url = await getSignedUrl(s3, getObjectCommand, { expiresIn: 86400 });
+
+      // Prepare metadata document
+      const metadata = {
+        fileName: key.split('/').pop(),
+        s3Key: key,
+        s3Bucket: bucket,
+        uploadDate: new Date(),
+        contentType: s3Object.ContentType,
+        size: s3Object.ContentLength,
+        url: url,
+        status: 'processing'
+      };
+
+      console.log('Created metadata:', metadata);
+
+      try {
+        // Get video duration
+        const videoStream = await s3.getObject({
+          Bucket: bucket,
+          Key: key
+        }).createReadStream();
+        
+        const duration = await getVideoDurationInSeconds(videoStream);
+        metadata.duration = duration;
+        metadata.status = 'ready';
+      } catch (error) {
+        console.error('Error getting video duration:', error);
+        metadata.status = 'error';
+      }
+
+      await collection.insertOne(metadata);
+      console.log('Metadata saved to MongoDB');
+    } catch (error) {
+      console.error('Error processing video:', error);
+      throw error;
+    }
   }
 
   return {
@@ -138,41 +152,6 @@ async function handleAPIRequest(event, collection) {
             'Access-Control-Allow-Origin': '*'
           },
           body: JSON.stringify(video)
-        };
-      }
-      break;
-
-    case 'DELETE':
-      if (event.pathParameters?.videoId) {
-        const video = await collection.findOne({
-          _id: new ObjectId(event.pathParameters.videoId)
-        });
-        
-        if (!video) {
-          return {
-            statusCode: 404,
-            headers: {
-              'Access-Control-Allow-Origin': '*'
-            },
-            body: JSON.stringify({ error: 'Video not found' })
-          };
-        }
-
-        // Delete from S3
-        await s3.deleteObject({
-          Bucket: video.s3Bucket,
-          Key: video.s3Key
-        });
-
-        // Delete from MongoDB
-        await collection.deleteOne({ _id: new ObjectId(event.pathParameters.videoId) });
-
-        return {
-          statusCode: 200,
-          headers: {
-            'Access-Control-Allow-Origin': '*'
-          },
-          body: JSON.stringify({ message: 'Video deleted successfully' })
         };
       }
       break;
