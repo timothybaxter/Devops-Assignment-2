@@ -3,11 +3,6 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { MongoClient, ObjectId } from 'mongodb';
 import { getVideoDurationInSeconds } from 'get-video-duration';
 
-// Initialize S3 client with region
-const s3Client = new S3Client({
-  region: 'us-east-1'
-});
-
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
 
@@ -26,11 +21,21 @@ async function connectToDatabase() {
 export const handler = async (event) => {
   try {
     console.log('Event received:', JSON.stringify(event, null, 2));
+    
+    // Get region from the event
+    const region = event.Records[0].awsRegion;
+    console.log('Using region from event:', region);
+
+    // Initialize S3 client with region from event
+    const s3Client = new S3Client({
+      region: region
+    });
+
     const db = await connectToDatabase();
     const videosCollection = db.collection('videos');
 
     if (event.Records) {
-      return await handleS3Event(event, videosCollection);
+      return await handleS3Event(event, videosCollection, s3Client);
     } else if (event.httpMethod) {
       return await handleAPIRequest(event, videosCollection);
     }
@@ -47,7 +52,7 @@ export const handler = async (event) => {
   }
 };
 
-async function handleS3Event(event, collection) {
+async function handleS3Event(event, collection, s3Client) {
   for (const record of event.Records) {
     if (!record.eventName.startsWith('ObjectCreated:')) continue;
 
@@ -62,6 +67,8 @@ async function handleS3Event(event, collection) {
         Bucket: bucket,
         Key: key
       });
+
+      console.log('Getting object metadata...');
       const s3Object = await s3Client.send(headCommand);
 
       // Create GetObject command for signed URL
@@ -70,7 +77,7 @@ async function handleS3Event(event, collection) {
         Key: key
       });
 
-      // Generate signed URL (24 hour expiry)
+      console.log('Generating signed URL...');
       const url = await getSignedUrl(s3Client, getCommand, { expiresIn: 86400 });
 
       // Prepare metadata document
@@ -88,6 +95,7 @@ async function handleS3Event(event, collection) {
       console.log('Created metadata:', metadata);
 
       try {
+        console.log('Getting video duration...');
         const videoStream = (await s3Client.send(getCommand)).Body;
         const duration = await getVideoDurationInSeconds(videoStream);
         metadata.duration = duration;
@@ -97,6 +105,7 @@ async function handleS3Event(event, collection) {
         metadata.status = 'error';
       }
 
+      console.log('Saving to MongoDB...');
       await collection.insertOne(metadata);
       console.log('Metadata saved to MongoDB');
 
@@ -110,54 +119,4 @@ async function handleS3Event(event, collection) {
       throw error;
     }
   }
-}
-
-async function handleAPIRequest(event, collection) {
-  switch (event.httpMethod) {
-    case 'GET':
-      if (event.path === '/videos') {
-        const videos = await collection.find({ status: 'ready' })
-          .sort({ uploadDate: -1 })
-          .toArray();
-        
-        return {
-          statusCode: 200,
-          headers: {
-            'Access-Control-Allow-Origin': '*'
-          },
-          body: JSON.stringify(videos)
-        };
-      } else if (event.pathParameters?.videoId) {
-        const video = await collection.findOne({
-          _id: new ObjectId(event.pathParameters.videoId)
-        });
-        
-        if (!video) {
-          return {
-            statusCode: 404,
-            headers: {
-              'Access-Control-Allow-Origin': '*'
-            },
-            body: JSON.stringify({ error: 'Video not found' })
-          };
-        }
-
-        return {
-          statusCode: 200,
-          headers: {
-            'Access-Control-Allow-Origin': '*'
-          },
-          body: JSON.stringify(video)
-        };
-      }
-      break;
-  }
-
-  return {
-    statusCode: 400,
-    headers: {
-      'Access-Control-Allow-Origin': '*'
-    },
-    body: JSON.stringify({ error: 'Invalid request' })
-  };
 }
