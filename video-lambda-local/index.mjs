@@ -3,7 +3,11 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { MongoClient, ObjectId } from 'mongodb';
 import { getVideoDurationInSeconds } from 'get-video-duration';
 
-const s3 = new S3();
+// Initialize S3 client with region
+const s3 = new S3({
+  region: 'us-east-1'  // Added region
+});
+
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
 
