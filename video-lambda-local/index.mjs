@@ -1,9 +1,9 @@
 import { MongoClient } from 'mongodb';
-import { S3 } from 'aws-sdk';
+import { S3Client, HeadObjectCommand } from '@aws-sdk/client-s3';
 
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
-const s3 = new S3();
+const s3Client = new S3Client({ region: 'us-east-1' });
 
 let cachedDb = null;
 
@@ -36,7 +36,12 @@ async function processS3Event(record) {
 
   // Get video metadata from S3
   try {
-    const s3Object = await s3.headObject({ Bucket: bucket, Key: key }).promise();
+    const headObjectCommand = new HeadObjectCommand({
+      Bucket: bucket,
+      Key: key
+    });
+    
+    const s3Object = await s3Client.send(headObjectCommand);
     
     const videoMetadata = {
       key: key,
