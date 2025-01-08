@@ -1,0 +1,7 @@
+Commands To Remember:
+
+Video Steam - http://54.236.113.184/videos/test.mp4
+:
+            - IP is Ec2 IP for video
+
+Connecting to EC: ssh -i vockey.pem ec2-54-236-113-184.compute-1.amazonaws.com

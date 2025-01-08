@@ -1,8 +1,8 @@
 {
   "name": "watchlist-lambda-local",
   "version": "1.0.0",
-  "main": "index.js",
-  "type": "commonjs",
+  "type": "module",
+  "main": "index.mjs",
   "dependencies": {
     "mongodb": "^6.12.0"
   },
