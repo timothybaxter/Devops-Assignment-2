@@ -1,8 +1,10 @@
-const { MongoClient, ObjectId } = require('mongodb');
+import { MongoClient, ObjectId } from 'mongodb';
 
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
 let cachedDb = null;
+console.log('Testing automatic deployment via webhook - ' + new Date().toISOString());
+
 
 async function connectToDatabase() {
   if (cachedDb) return cachedDb;
@@ -11,62 +13,52 @@ async function connectToDatabase() {
   return cachedDb;
 }
 
-exports.handler = async (event) => {
-  try {
-    const db = await connectToDatabase();
-    const watchlistsCollection = db.collection('watchlists');
-    const body = JSON.parse(event.body || '{}');
-    
-    const response = {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Content-Type': 'application/json'
-      }
-    };
+export const handler = async (event) => {
+    console.log('Raw event body:', event.body);
 
-    if (event.httpMethod === 'GET') {
-      const watchlist = await watchlistsCollection.findOne({ userId: body.userId });
-      const videos = watchlist ? await db.collection('videos')
-        .find({ _id: { $in: (watchlist.videos || []).map(id => new ObjectId(id)) }})
-        .toArray() : [];
-      
-      return {
-        ...response,
-        statusCode: 200,
-        body: JSON.stringify({ videos })
-      };
+    try {
+        // Ensure body is parsed correctly
+        const body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
+        console.log('Parsed body:', body);
+
+        // Extract required fields
+        const userId = body?.userId;
+        const videoId = body?.videoId;
+
+        if (!userId || !videoId) {
+            throw new Error('Missing required fields: userId or videoId');
+        }
+
+        const db = await connectToDatabase();
+        const watchlistsCollection = db.collection('watchlists');
+
+        await watchlistsCollection.updateOne(
+            { userId: userId },
+            {
+                $addToSet: { videos: videoId },
+                $setOnInsert: { createdAt: new Date() },
+            },
+            { upsert: true }
+        );
+
+        return {
+            statusCode: 200,
+            headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ message: 'Watchlist updated successfully' }),
+        };
+    } catch (error) {
+        console.error('Error:', error.message);
+
+        return {
+            statusCode: 500,
+            headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ error: error.message }),
+        };
     }
-
-    if (event.httpMethod === 'POST') {
-      await watchlistsCollection.updateOne(
-        { userId: body.userId },
-        { 
-          $addToSet: { videos: body.videoId },
-          $setOnInsert: { createdAt: new Date() }
-        },
-        { upsert: true }
-      );
-      
-      return {
-        ...response,
-        statusCode: 200,
-        body: JSON.stringify({ message: 'Watchlist updated successfully' })
-      };
-    }
-
-    return {
-      ...response,
-      statusCode: 400,
-      body: JSON.stringify({ error: 'Invalid method' })
-    };
-  } catch (error) {
-    return {
-      statusCode: 500,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ error: error.message })
-    };
-  }
-}
+};
