@@ -1,11 +1,15 @@
+import { S3Client, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { SSMClient, SendCommandCommand } from '@aws-sdk/client-ssm';
+import { EC2Client, DescribeInstancesCommand } from '@aws-sdk/client-ec2';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { MongoClient } from 'mongodb';
-import { S3Client, HeadObjectCommand } from '@aws-sdk/client-s3';
+
+const s3Client = new S3Client({ region: 'us-east-1' });
+const ssmClient = new SSMClient({ region: 'us-east-1' });
+const ec2Client = new EC2Client({ region: 'us-east-1' });
 
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
-const s3Client = new S3Client({ region: 'us-east-1' });
-console.log('Testing automatic deployment via webhook - 4' + new Date().toISOString());
-
 
 let cachedDb = null;
 
@@ -16,87 +20,103 @@ async function connectToDatabase() {
   return cachedDb;
 }
 
-async function processS3Event(record) {
-  const bucket = record.s3.bucket.name;
-  const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
-  const size = record.s3.object.size;
-  const eventName = record.eventName;
+async function getEC2Instance() {
+  const command = new DescribeInstancesCommand({
+    Filters: [{
+      Name: 'tag:Name',
+      Values: ['video-streaming']
+    }]
+  });
+  const { Reservations } = await ec2Client.send(command);
+  return Reservations[0].Instances[0];
+}
 
-  // Only process video uploads
-  if (!key.startsWith('videos/') || !key.toLowerCase().endsWith('.mp4')) {
-    console.log('Skipping non-video file:', key);
-    return null;
-  }
-
-  // Handle deletion events
-  if (eventName.startsWith('ObjectRemoved:')) {
-    const db = await connectToDatabase();
-    await db.collection('videos').deleteOne({ key: key });
-    console.log('Deleted video metadata for:', key);
-    return;
-  }
-
-  // Get video metadata from S3
+async function updateEC2WithVideo(bucket, key, fileName) {
   try {
-    const headObjectCommand = new HeadObjectCommand({
-      Bucket: bucket,
-      Key: key
-    });
-    
-    const s3Object = await s3Client.send(headObjectCommand);
-    
-    const videoMetadata = {
-      key: key,
-      filename: key.split('/').pop(),
-      size: size,
-      contentType: s3Object.ContentType,
-      lastModified: s3Object.LastModified,
-      uploadDate: new Date(),
-      url: `https://${bucket}.s3.amazonaws.com/${key}`,
-      status: 'active'
-    };
+    const instance = await getEC2Instance();
+    const command = `
+      aws s3 cp s3://${bucket}/${key} /home/ec2-user/video-service/mp4/${fileName} &&
+      cd /home/ec2-user/video-service &&
+      docker restart videoserv || (
+        docker rm -f videoserv;
+        docker run -d -p 1935:1935 -p 80:80 --name videoserv -v $PWD/mp4:/var/mp4s -v $PWD/www:/var/www video /usr/local/nginx-streaming/sbin/nginx
+      )
+    `;
 
-    // Store in MongoDB
-    const db = await connectToDatabase();
-    await db.collection('videos').updateOne(
-      { key: key },
-      { $set: videoMetadata },
-      { upsert: true }
-    );
-
-    console.log('Successfully processed video:', key);
-    return videoMetadata;
+    await ssmClient.send(new SendCommandCommand({
+      InstanceIds: [instance.InstanceId],
+      DocumentName: 'AWS-RunShellScript',
+      Parameters: { commands: [command] }
+    }));
+    
+    return instance.PublicIpAddress;
   } catch (error) {
-    console.error('Error processing video:', key, error);
+    console.error('EC2 update error:', error);
     throw error;
   }
 }
 
 export const handler = async (event) => {
-  console.log('Raw event:', JSON.stringify(event, null, 2));
-
   try {
-    const results = await Promise.all(
-      event.Records.map(record => processS3Event(record))
-    );
+    console.log('Event received:', JSON.stringify(event, null, 2));
+    const db = await connectToDatabase();
+    const videosCollection = db.collection('videos');
 
-    return {
-      statusCode: 200,
-      headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({
-        message: 'Processed S3 events successfully',
-        results: results.filter(r => r !== null)
-      })
-    };
+    if (event.Records) {
+      for (const record of event.Records) {
+        if (record.eventName.startsWith('ObjectCreated:')) {
+          await handleS3Create(record, videosCollection);
+        } else if (record.eventName.startsWith('ObjectRemoved:')) {
+          await handleS3Delete(record, videosCollection);
+        }
+      }
+      return { statusCode: 200, body: JSON.stringify({ message: 'Success' }) };
+    }
+
+    return { statusCode: 400, body: JSON.stringify({ message: 'Invalid event' }) };
   } catch (error) {
     console.error('Error:', error);
     return {
       statusCode: 500,
-      headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({
-        error: 'Failed to process S3 events',
-        details: error.message
-      })
+      body: JSON.stringify({ error: 'Internal server error', details: error.message })
     };
   }
 };
+
+async function handleS3Create(record, collection) {
+  const bucket = record.s3.bucket.name;
+  const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
+  const fileName = key.split('/').pop();
+
+  try {
+    // Get S3 metadata
+    const headCommand = new HeadObjectCommand({ Bucket: bucket, Key: key });
+    const s3Object = await s3Client.send(headCommand);
+
+    // Update EC2 and get public IP
+    const publicIp = await updateEC2WithVideo(bucket, key, fileName);
+
+    // Create metadata
+    const metadata = {
+      fileName,
+      s3Key: key,
+      s3Bucket: bucket,
+      uploadDate: new Date(),
+      contentType: s3Object.ContentType,
+      size: s3Object.ContentLength,
+      streamingUrl: `http://${publicIp}/vod2/${fileName}`,
+      status: 'ready'
+    };
+
+    await collection.insertOne(metadata);
+    console.log('Video processed successfully:', metadata);
+  } catch (error) {
+    console.error('Error processing video:', error);
+    throw error;
+  }
+}
+
+async function handleS3Delete(record, collection) {
+  const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
+  await collection.deleteOne({ s3Key: key });
+}
