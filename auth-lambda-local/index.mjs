@@ -1,21 +1,20 @@
-// auth-lambda/index.mjs
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-// Add this near the start of your handler function
-console.log('Auth Lambda function executed - PIPELINE TEST');
-console.log('Testing automatic deployment via webhook - test 3' + new Date().toISOString());
+
+console.log('Auth Lambda function executed');
+console.log('Testing automatic deployment via webhook - ' + new Date().toISOString());
 
 // User Schema
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
   name: { type: String, required: true },
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
 });
 
 // Hash password before saving
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function (next) {
   if (this.isModified('password')) {
     this.password = await bcrypt.hash(this.password, 10);
   }
@@ -41,34 +40,90 @@ async function connectToDatabase() {
     cachedDb = connection;
     return cachedDb;
   } catch (error) {
-    console.error('MongoDB connection error:', error);
-    throw error; // Re-throw to handle in the main handler
+    console.error('MongoDB connection error:', error.message); // Add debug log
+    throw new Error('Database connection failed'); // Custom error message
   }
+}
+
+
+// Validation functions
+function validateLoginInput(payload) {
+  return payload && payload.email && payload.password;
+}
+
+function validateRegistrationInput(payload) {
+  return payload && payload.email && payload.password && payload.name;
 }
 
 // Lambda handler
 export const handler = async (event) => {
   try {
-    await connectToDatabase();
-    
-    const { action, payload } = JSON.parse(event.body);
-    
+    let parsedBody;
+
+    // Parse request body
+    try {
+      parsedBody = JSON.parse(event.body);
+    } catch (error) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: 'Internal server error' }),
+      };
+    }
+
+    // Validate basic request structure
+    if (!parsedBody.action || !parsedBody.payload) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: 'Invalid action' }),
+      };
+    }
+
+    // Connect to database before any operations
+    try {
+      const db = await connectToDatabase();
+      if (!db) {
+        throw new Error('Database connection failed');
+      }
+    } catch (error) {
+      console.error('Database connection error:', error.message);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: 'Internal server error' }),
+      };
+    }
+
+    const { action, payload } = parsedBody;
+
     switch (action) {
       case 'register':
+        if (!validateRegistrationInput(payload)) {
+          return {
+            statusCode: 400,
+            body: JSON.stringify({ error: 'Missing required fields' }),
+          };
+        }
         return await handleRegister(payload);
+
       case 'login':
+        if (!validateLoginInput(payload)) {
+          return {
+            statusCode: 400,
+            body: JSON.stringify({ error: 'Missing required fields' }),
+          };
+        }
         return await handleLogin(payload);
+
       default:
         return {
           statusCode: 400,
-          body: JSON.stringify({ error: 'Invalid action' })
+          body: JSON.stringify({ error: 'Invalid action' }),
         };
     }
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Error:', error.message);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: 'Internal server error' })
+      body: JSON.stringify({ error: 'Internal server error' }),
     };
   }
 };
@@ -79,7 +134,7 @@ async function handleRegister({ email, password, name }) {
     if (existingUser) {
       return {
         statusCode: 400,
-        body: JSON.stringify({ error: 'Email already registered' })
+        body: JSON.stringify({ error: 'Email already registered' }),
       };
     }
 
@@ -99,15 +154,15 @@ async function handleRegister({ email, password, name }) {
         user: {
           id: user._id,
           email: user.email,
-          name: user.name
-        }
-      })
+          name: user.name,
+        },
+      }),
     };
   } catch (error) {
-    console.error('Registration error:', error);
+    console.error('Registration error:', error.message);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: 'Registration failed' })
+      body: JSON.stringify({ error: 'Registration failed' }),
     };
   }
 }
@@ -118,7 +173,7 @@ async function handleLogin({ email, password }) {
     if (!user) {
       return {
         statusCode: 401,
-        body: JSON.stringify({ error: 'Invalid credentials' })
+        body: JSON.stringify({ error: 'Invalid credentials' }),
       };
     }
 
@@ -126,7 +181,7 @@ async function handleLogin({ email, password }) {
     if (!isValidPassword) {
       return {
         statusCode: 401,
-        body: JSON.stringify({ error: 'Invalid credentials' })
+        body: JSON.stringify({ error: 'Invalid credentials' }),
       };
     }
 
@@ -143,15 +198,15 @@ async function handleLogin({ email, password }) {
         user: {
           id: user._id,
           email: user.email,
-          name: user.name
-        }
-      })
+          name: user.name,
+        },
+      }),
     };
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('Login error:', error.message);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: 'Login failed' })
+      body: JSON.stringify({ error: 'Login failed' }),
     };
   }
 }
