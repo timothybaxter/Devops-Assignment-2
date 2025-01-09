@@ -6,15 +6,15 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
 const EC2_INSTANCE_ID = process.env.EC2_INSTANCE_ID;
 
-const s3Client = new S3Client({ region: 'us-east-1' });
-const ec2Client = new EC2Client({ region: 'us-east-1' });
-
 const headers = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
   'Content-Type': 'application/json'
 };
+
+const s3Client = new S3Client({ region: 'us-east-1' });
+const ec2Client = new EC2Client({ region: 'us-east-1' });
 
 let cachedDb = null;
 
