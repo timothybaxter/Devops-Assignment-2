@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 console.log('Auth Lambda function executed');
+console.log('Auth Lambda webhook test');
 
 // Format response with CORS headers
 const headers = {
