@@ -24,15 +24,12 @@ try {
   User = mongoose.model('User', userSchema);
 }
 
-export const handler = async (event) => {
-  console.log('Received event:', JSON.stringify(event));
-
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json'
-  };
+export const headers = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+  'Content-Type': 'application/json'
+};
 
   try {
     if (event.httpMethod === 'OPTIONS') {
