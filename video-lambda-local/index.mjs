@@ -1,11 +1,13 @@
 import { MongoClient } from 'mongodb';
-import { S3Client, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { EC2Client, DescribeInstancesCommand, ModifyInstanceAttributeCommand, StopInstancesCommand, StartInstancesCommand } from '@aws-sdk/client-ec2';
 
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
-const s3Client = new S3Client({ region: 'us-east-1' });
-console.log('Testing automatic deployment via webhook - 6' + new Date().toISOString());
+const EC2_INSTANCE_ID = process.env.EC2_INSTANCE_ID;
 
+const s3Client = new S3Client({ region: 'us-east-1' });
+const ec2Client = new EC2Client({ region: 'us-east-1' });
 
 let cachedDb = null;
 
@@ -14,6 +16,72 @@ async function connectToDatabase() {
   const client = await MongoClient.connect(MONGODB_URI);
   cachedDb = client.db(DB_NAME);
   return cachedDb;
+}
+
+async function syncVideoToEC2(bucket, key, eventType) {
+  try {
+    // Get EC2 instance info
+    const describeCommand = new DescribeInstancesCommand({
+      InstanceIds: [EC2_INSTANCE_ID]
+    });
+    const instanceData = await ec2Client.send(describeCommand);
+    const publicIp = instanceData.Reservations[0].Instances[0].PublicIpAddress;
+
+    // Create user data script
+    let userData;
+    if (eventType.startsWith('ObjectCreated')) {
+      userData = Buffer.from(`#!/bin/bash
+      cd /home/ec2-user
+      aws s3 cp s3://${bucket}/${key} /usr/share/nginx/html/videos/
+      chmod 644 /usr/share/nginx/html/videos/*
+      service nginx restart
+      `).toString('base64');
+    } else if (eventType.startsWith('ObjectRemoved')) {
+      userData = Buffer.from(`#!/bin/bash
+      cd /home/ec2-user
+      rm -f /usr/share/nginx/html/videos/${key.split('/').pop()}
+      service nginx restart
+      `).toString('base64');
+    }
+
+    // Update EC2 user data
+    const modifyCommand = new ModifyInstanceAttributeCommand({
+      InstanceId: EC2_INSTANCE_ID,
+      UserData: {
+        Value: userData
+      }
+    });
+    await ec2Client.send(modifyCommand);
+
+    // Stop instance
+    const stopCommand = new StopInstancesCommand({
+      InstanceIds: [EC2_INSTANCE_ID]
+    });
+    await ec2Client.send(stopCommand);
+
+    // Wait for instance to stop (simple polling)
+    let stopped = false;
+    while (!stopped) {
+      const status = await ec2Client.send(describeCommand);
+      const state = status.Reservations[0].Instances[0].State.Name;
+      if (state === 'stopped') {
+        stopped = true;
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+      }
+    }
+
+    // Start instance
+    const startCommand = new StartInstancesCommand({
+      InstanceIds: [EC2_INSTANCE_ID]
+    });
+    await ec2Client.send(startCommand);
+
+    return publicIp;
+  } catch (error) {
+    console.error('Error syncing to EC2:', error);
+    throw error;
+  }
 }
 
 async function processS3Event(record) {
@@ -33,6 +101,9 @@ async function processS3Event(record) {
     const db = await connectToDatabase();
     await db.collection('videos').deleteOne({ key: key });
     console.log('Deleted video metadata for:', key);
+    
+    // Sync deletion to EC2
+    await syncVideoToEC2(bucket, key, eventName);
     return;
   }
 
@@ -64,8 +135,18 @@ async function processS3Event(record) {
       { upsert: true }
     );
 
+    // Sync video to EC2
+    const publicIp = await syncVideoToEC2(bucket, key, eventName);
+    
+    // Update metadata with streaming URL
+    const streamingUrl = `http://${publicIp}/videos/${videoMetadata.filename}`;
+    await db.collection('videos').updateOne(
+      { key: key },
+      { $set: { streamingUrl: streamingUrl } }
+    );
+
     console.log('Successfully processed video:', key);
-    return videoMetadata;
+    return { ...videoMetadata, streamingUrl };
   } catch (error) {
     console.error('Error processing video:', key, error);
     throw error;
