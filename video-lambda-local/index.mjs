@@ -1,6 +1,9 @@
 import { MongoClient } from 'mongodb';
-import { S3Client, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { EC2Client, DescribeInstancesCommand, ModifyInstanceAttributeCommand, StopInstancesCommand, StartInstancesCommand } from '@aws-sdk/client-ec2';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import ffmpeg from 'fluent-ffmpeg';
+import fs from 'fs';
 
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
@@ -23,6 +26,45 @@ async function connectToDatabase() {
   const client = await MongoClient.connect(MONGODB_URI);
   cachedDb = client.db(DB_NAME);
   return cachedDb;
+}
+
+async function generateThumbnail(bucket, key) {
+  const thumbnailKey = `thumbnails/${key.split('/').pop().replace('.mp4', '.jpg')}`;
+  
+  try {
+    // Get signed URL for video
+    const getObjectCommand = new GetObjectCommand({
+      Bucket: bucket,
+      Key: key
+    });
+    const signedUrl = await getSignedUrl(s3Client, getObjectCommand, { expiresIn: 3600 });
+
+    // Generate thumbnail
+    await new Promise((resolve, reject) => {
+      ffmpeg(signedUrl)
+        .screenshots({
+          timestamps: ['00:00:01.000'],
+          filename: 'thumbnail.jpg',
+          folder: '/tmp',
+          size: '320x240'
+        })
+        .on('end', resolve)
+        .on('error', reject);
+    });
+
+    // Upload thumbnail to S3
+    await s3Client.send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: thumbnailKey,
+      Body: fs.readFileSync('/tmp/thumbnail.jpg'),
+      ContentType: 'image/jpeg'
+    }));
+
+    return `https://${bucket}.s3.amazonaws.com/${thumbnailKey}`;
+  } catch (error) {
+    console.error('Error generating thumbnail:', error);
+    return null;
+  }
 }
 
 async function syncVideoToEC2(bucket, key, eventType) {
@@ -111,6 +153,9 @@ async function processS3Event(record) {
     
     const s3Object = await s3Client.send(headObjectCommand);
     
+    // Generate thumbnail
+    const thumbnailUrl = await generateThumbnail(bucket, key);
+    
     const videoMetadata = {
       key: key,
       filename: key.split('/').pop(),
@@ -119,6 +164,7 @@ async function processS3Event(record) {
       lastModified: s3Object.LastModified,
       uploadDate: new Date(),
       url: `https://${bucket}.s3.amazonaws.com/${key}`,
+      thumbnailUrl: thumbnailUrl,
       status: 'active'
     };
 
@@ -201,4 +247,4 @@ export const handler = async (event) => {
       body: JSON.stringify({ error: error.message })
     };
   }
-};
+};  
