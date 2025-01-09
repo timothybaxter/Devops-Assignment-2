@@ -4,7 +4,7 @@ import { S3Client, HeadObjectCommand } from '@aws-sdk/client-s3';
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
 const s3Client = new S3Client({ region: 'us-east-1' });
-console.log('Testing automatic deployment via webhook - 4' + new Date().toISOString());
+console.log('Testing automatic deployment via webhook - 5' + new Date().toISOString());
 
 
 let cachedDb = null;
