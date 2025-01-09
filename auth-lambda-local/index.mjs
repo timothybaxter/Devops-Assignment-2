@@ -5,17 +5,19 @@ import jwt from 'jsonwebtoken';
 console.log('Auth Lambda function executed');
 
 // Format response with CORS headers
-const formatResponse = (statusCode, body) => ({
-  statusCode,
-  headers: {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Credentials': true,
-    'Access-Control-Allow-Methods': 'OPTIONS,POST',
-    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-  },
-  body: JSON.stringify(body),
-});
+const headers = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+  'Content-Type': 'application/json'
+};
 
+// In your Lambda response:
+return {
+  statusCode: 200,
+  headers,
+  body: JSON.stringify({ token: generatedToken })
+};
 // User Schema
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
