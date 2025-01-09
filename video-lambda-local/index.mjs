@@ -31,11 +31,12 @@ async function syncVideoToEC2(bucket, key, eventType) {
     let userData;
     if (eventType.startsWith('ObjectCreated')) {
       userData = Buffer.from(`#!/bin/bash
-      cd /home/ec2-user
-      aws s3 cp s3://${bucket}/${key} /usr/share/nginx/html/videos/
-      chmod 644 /usr/share/nginx/html/videos/*
-      service nginx restart
-      `).toString('base64');
+        cd /home/ec2-user
+        aws s3 cp s3://${bucket}/${key} /usr/share/nginx/html/videos/
+        sudo chown nginx:nginx /usr/share/nginx/html/videos/*
+        sudo chmod 644 /usr/share/nginx/html/videos/*
+        sudo systemctl restart nginx
+        `).toString('base64');
     } else if (eventType.startsWith('ObjectRemoved')) {
       userData = Buffer.from(`#!/bin/bash
       cd /home/ec2-user
