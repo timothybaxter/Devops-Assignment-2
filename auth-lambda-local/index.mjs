@@ -3,7 +3,6 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 console.log('Auth Lambda function executed');
-console.log('Testing automatic deployment via webhook - ' + new Date().toISOString());
 
 // Format response with CORS headers
 const formatResponse = (statusCode, body) => ({
@@ -12,9 +11,9 @@ const formatResponse = (statusCode, body) => ({
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Credentials': true,
     'Access-Control-Allow-Methods': 'OPTIONS,POST',
-    'Access-Control-Allow-Headers': 'Content-Type,Authorization'
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
   },
-  body: JSON.stringify(body)
+  body: JSON.stringify(body),
 });
 
 // User Schema
@@ -68,6 +67,9 @@ function validateRegistrationInput(payload) {
 
 // Lambda handler
 export const handler = async (event) => {
+  // Log the incoming event
+  console.log('Received event:', JSON.stringify(event, null, 2));
+
   // Handle OPTIONS request for CORS
   if (event.httpMethod === 'OPTIONS') {
     return formatResponse(200, {});
@@ -76,11 +78,13 @@ export const handler = async (event) => {
   try {
     let parsedBody;
 
-    // Parse request body
+    // Parse request body with better error handling
     try {
+      console.log('Raw event.body:', event.body);
       parsedBody = JSON.parse(event.body);
     } catch (error) {
-      return formatResponse(500, { error: 'Invalid request body' });
+      console.error('Body parsing error:', error.message);
+      return formatResponse(400, { error: 'Invalid request body' });
     }
 
     // Validate basic request structure
@@ -88,7 +92,7 @@ export const handler = async (event) => {
       return formatResponse(400, { error: 'Invalid request format - missing action or payload' });
     }
 
-    // Connect to database before any operations
+    // Connect to the database
     try {
       const db = await connectToDatabase();
       if (!db) {
@@ -118,7 +122,7 @@ export const handler = async (event) => {
         return formatResponse(400, { error: 'Invalid action specified' });
     }
   } catch (error) {
-    console.error('Error:', error.message);
+    console.error('Unhandled error:', error.message);
     return formatResponse(500, { error: 'Internal server error' });
   }
 };
@@ -145,7 +149,7 @@ async function handleRegister({ email, password, name }) {
         id: user._id,
         email: user.email,
         name: user.name,
-      }
+      },
     });
   } catch (error) {
     console.error('Registration error:', error.message);
@@ -177,7 +181,7 @@ async function handleLogin({ email, password }) {
         id: user._id,
         email: user.email,
         name: user.name,
-      }
+      },
     });
   } catch (error) {
     console.error('Login error:', error.message);
