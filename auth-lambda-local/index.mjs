@@ -17,55 +17,87 @@ export const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+    'Access-Control-Allow-Headers': 'Content-Type',
     'Content-Type': 'application/json'
   };
 
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: '' };
+  }
+
   try {
-    await mongoose.connect(MONGODB_URI);
-    
-    console.log('Raw event body:', event.body);
-    const parsedBody = JSON.parse(event.body);
-    console.log('Parsed body:', parsedBody);
-    const { action, payload } = parsedBody;
-    
+    console.log('Event:', event);
+    console.log('Event body:', event.body);
+
+    if (!event.body) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: 'Missing request body' })
+      };
+    }
+
+    const { action, payload } = JSON.parse(event.body);
+    console.log('Parsed payload:', payload);
+
+    if (!action || !payload) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: 'Invalid request format' })
+      };
+    }
+
+    await mongoose.connect(process.env.MONGODB_URI);
+
     if (action === 'register') {
       const { email, password, name } = payload;
       
+      if (!email || !password || !name) {
+        return {
+          statusCode: 400,
+          headers,
+          body: JSON.stringify({ error: 'Missing required fields' })
+        };
+      }
+
       const existingUser = await User.findOne({ email });
       if (existingUser) {
         return {
           statusCode: 400,
           headers,
-          body: JSON.stringify({ error: 'User already exists' })
+          body: JSON.stringify({ error: 'Email already registered' })
         };
       }
-      
+
       const hashedPassword = await bcrypt.hash(password, 10);
-      const user = new User({
-        email,
-        password: hashedPassword,
-        name
-      });
-      
+      const user = new User({ email, password: hashedPassword, name });
       await user.save();
-      
+
       const token = jwt.sign(
         { userId: user._id, email: user.email },
-        JWT_SECRET,
+        process.env.JWT_SECRET,
         { expiresIn: '24h' }
       );
-      
+
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify({ token })
       };
     }
-    
+
     if (action === 'login') {
       const { email, password } = payload;
       
+      if (!email || !password) {
+        return {
+          statusCode: 400,
+          headers,
+          body: JSON.stringify({ error: 'Missing credentials' })
+        };
+      }
+
       const user = await User.findOne({ email });
       if (!user) {
         return {
@@ -74,7 +106,7 @@ export const handler = async (event) => {
           body: JSON.stringify({ error: 'Invalid credentials' })
         };
       }
-      
+
       const isValidPassword = await bcrypt.compare(password, user.password);
       if (!isValidPassword) {
         return {
@@ -83,25 +115,26 @@ export const handler = async (event) => {
           body: JSON.stringify({ error: 'Invalid credentials' })
         };
       }
-      
+
       const token = jwt.sign(
         { userId: user._id, email: user.email },
-        JWT_SECRET,
+        process.env.JWT_SECRET,
         { expiresIn: '24h' }
       );
-      
+
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify({ token })
       };
     }
-    
+
     return {
       statusCode: 400,
       headers,
       body: JSON.stringify({ error: 'Invalid action' })
     };
+
   } catch (error) {
     console.error('Error:', error);
     return {
@@ -110,6 +143,8 @@ export const handler = async (event) => {
       body: JSON.stringify({ error: 'Internal server error' })
     };
   } finally {
-    await mongoose.disconnect();
+    if (mongoose.connection.readyState === 1) {
+      await mongoose.disconnect();
+    }
   }
 };
