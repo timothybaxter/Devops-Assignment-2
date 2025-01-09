@@ -3,8 +3,13 @@ import { MongoClient, ObjectId } from 'mongodb';
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
 let cachedDb = null;
-console.log('Testing automatic deployment via webhook - ' + new Date().toISOString());
 
+const headers = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+  'Content-Type': 'application/json'
+};
 
 async function connectToDatabase() {
   if (cachedDb) return cachedDb;
@@ -14,51 +19,92 @@ async function connectToDatabase() {
 }
 
 export const handler = async (event) => {
-    console.log('Raw event body:', event.body);
+  console.log('Event:', JSON.stringify(event, null, 2));
 
-    try {
-        // Ensure body is parsed correctly
-        const body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
-        console.log('Parsed body:', body);
+  if (event.httpMethod === 'OPTIONS') {
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ message: 'OK' })
+    };
+  }
 
-        // Extract required fields
-        const userId = body?.userId;
-        const videoId = body?.videoId;
+  try {
+    const db = await connectToDatabase();
+    const watchlistsCollection = db.collection('watchlists');
 
-        if (!userId || !videoId) {
-            throw new Error('Missing required fields: userId or videoId');
-        }
-
-        const db = await connectToDatabase();
-        const watchlistsCollection = db.collection('watchlists');
-
-        await watchlistsCollection.updateOne(
-            { userId: userId },
-            {
-                $addToSet: { videos: videoId },
-                $setOnInsert: { createdAt: new Date() },
-            },
-            { upsert: true }
-        );
-
+    // GET request - retrieve watchlist
+    if (event.httpMethod === 'GET') {
+      const userId = event.queryStringParameters?.userId;
+      if (!userId) {
         return {
-            statusCode: 200,
-            headers: {
-                'Access-Control-Allow-Origin': '*',
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ message: 'Watchlist updated successfully' }),
+          statusCode: 400,
+          headers,
+          body: JSON.stringify({ error: 'Missing userId parameter' })
         };
-    } catch (error) {
-        console.error('Error:', error.message);
+      }
 
+      const watchlist = await watchlistsCollection.findOne({ userId });
+      if (!watchlist) {
         return {
-            statusCode: 500,
-            headers: {
-                'Access-Control-Allow-Origin': '*',
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ error: error.message }),
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ videos: [] })
         };
+      }
+
+      // Fetch video details for watchlist
+      const videos = await db.collection('videos')
+        .find({ _id: { $in: watchlist.videos.map(id => new ObjectId(id)) } })
+        .toArray();
+
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify(videos)
+      };
     }
+
+    // POST request - add to watchlist
+    if (event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body);
+      const { userId, videoId } = body;
+
+      if (!userId || !videoId) {
+        return {
+          statusCode: 400,
+          headers,
+          body: JSON.stringify({ error: 'Missing required fields' })
+        };
+      }
+
+      await watchlistsCollection.updateOne(
+        { userId },
+        {
+          $addToSet: { videos: videoId },
+          $setOnInsert: { createdAt: new Date() }
+        },
+        { upsert: true }
+      );
+
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ message: 'Watchlist updated successfully' })
+      };
+    }
+
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({ error: 'Invalid request method' })
+    };
+  } catch (error) {
+    console.error('Error:', error);
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ error: error.message })
+    };
+  }
 };

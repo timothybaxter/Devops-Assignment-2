@@ -9,6 +9,13 @@ const EC2_INSTANCE_ID = process.env.EC2_INSTANCE_ID;
 const s3Client = new S3Client({ region: 'us-east-1' });
 const ec2Client = new EC2Client({ region: 'us-east-1' });
 
+const headers = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+  'Content-Type': 'application/json'
+};
+
 let cachedDb = null;
 
 async function connectToDatabase() {
@@ -20,14 +27,12 @@ async function connectToDatabase() {
 
 async function syncVideoToEC2(bucket, key, eventType) {
   try {
-    // Get EC2 instance info
     const describeCommand = new DescribeInstancesCommand({
       InstanceIds: [EC2_INSTANCE_ID]
     });
     const instanceData = await ec2Client.send(describeCommand);
     const publicIp = instanceData.Reservations[0].Instances[0].PublicIpAddress;
 
-    // Create user data script
     let userData;
     if (eventType.startsWith('ObjectCreated')) {
       userData = Buffer.from(`#!/bin/bash
@@ -45,22 +50,17 @@ async function syncVideoToEC2(bucket, key, eventType) {
       `).toString('base64');
     }
 
-    // Update EC2 user data
     const modifyCommand = new ModifyInstanceAttributeCommand({
       InstanceId: EC2_INSTANCE_ID,
-      UserData: {
-        Value: userData
-      }
+      UserData: { Value: userData }
     });
     await ec2Client.send(modifyCommand);
 
-    // Stop instance
     const stopCommand = new StopInstancesCommand({
       InstanceIds: [EC2_INSTANCE_ID]
     });
     await ec2Client.send(stopCommand);
 
-    // Wait for instance to stop (simple polling)
     let stopped = false;
     while (!stopped) {
       const status = await ec2Client.send(describeCommand);
@@ -68,11 +68,10 @@ async function syncVideoToEC2(bucket, key, eventType) {
       if (state === 'stopped') {
         stopped = true;
       } else {
-        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
     }
 
-    // Start instance
     const startCommand = new StartInstancesCommand({
       InstanceIds: [EC2_INSTANCE_ID]
     });
@@ -91,24 +90,19 @@ async function processS3Event(record) {
   const size = record.s3.object.size;
   const eventName = record.eventName;
 
-  // Only process video uploads
   if (!key.startsWith('videos/') || !key.toLowerCase().endsWith('.mp4')) {
     console.log('Skipping non-video file:', key);
     return null;
   }
 
-  // Handle deletion events
   if (eventName.startsWith('ObjectRemoved:')) {
     const db = await connectToDatabase();
     await db.collection('videos').deleteOne({ key: key });
     console.log('Deleted video metadata for:', key);
-    
-    // Sync deletion to EC2
     await syncVideoToEC2(bucket, key, eventName);
     return;
   }
 
-  // Get video metadata from S3
   try {
     const headObjectCommand = new HeadObjectCommand({
       Bucket: bucket,
@@ -128,7 +122,6 @@ async function processS3Event(record) {
       status: 'active'
     };
 
-    // Store in MongoDB
     const db = await connectToDatabase();
     await db.collection('videos').updateOne(
       { key: key },
@@ -136,10 +129,7 @@ async function processS3Event(record) {
       { upsert: true }
     );
 
-    // Sync video to EC2
     const publicIp = await syncVideoToEC2(bucket, key, eventName);
-    
-    // Update metadata with streaming URL
     const streamingUrl = `http://${publicIp}/videos/${videoMetadata.filename}`;
     await db.collection('videos').updateOne(
       { key: key },
@@ -157,28 +147,58 @@ async function processS3Event(record) {
 export const handler = async (event) => {
   console.log('Raw event:', JSON.stringify(event, null, 2));
 
-  try {
-    const results = await Promise.all(
-      event.Records.map(record => processS3Event(record))
-    );
-
+  // Handle OPTIONS request
+  if (event.httpMethod === 'OPTIONS') {
     return {
       statusCode: 200,
-      headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({
-        message: 'Processed S3 events successfully',
-        results: results.filter(r => r !== null)
-      })
+      headers,
+      body: JSON.stringify({ message: 'OK' })
+    };
+  }
+
+  try {
+    // Handle GET request for video listing
+    if (event.httpMethod === 'GET') {
+      const db = await connectToDatabase();
+      const videos = await db.collection('videos')
+        .find({ status: 'active' })
+        .sort({ uploadDate: -1 })
+        .toArray();
+
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify(videos)
+      };
+    }
+
+    // Handle S3 events
+    if (event.Records) {
+      const results = await Promise.all(
+        event.Records.map(record => processS3Event(record))
+      );
+
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({
+          message: 'Processed S3 events successfully',
+          results: results.filter(r => r !== null)
+        })
+      };
+    }
+
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({ error: 'Invalid request' })
     };
   } catch (error) {
     console.error('Error:', error);
     return {
       statusCode: 500,
-      headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({
-        error: 'Failed to process S3 events',
-        details: error.message
-      })
+      headers,
+      body: JSON.stringify({ error: error.message })
     };
   }
 };
