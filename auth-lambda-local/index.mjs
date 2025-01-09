@@ -5,6 +5,18 @@ import jwt from 'jsonwebtoken';
 console.log('Auth Lambda function executed');
 console.log('Testing automatic deployment via webhook - ' + new Date().toISOString());
 
+// Format response with CORS headers
+const formatResponse = (statusCode, body) => ({
+  statusCode,
+  headers: {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Credentials': true,
+    'Access-Control-Allow-Methods': 'OPTIONS,POST',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization'
+  },
+  body: JSON.stringify(body)
+});
+
 // User Schema
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
@@ -40,11 +52,10 @@ async function connectToDatabase() {
     cachedDb = connection;
     return cachedDb;
   } catch (error) {
-    console.error('MongoDB connection error:', error.message); // Add debug log
-    throw new Error('Database connection failed'); // Custom error message
+    console.error('MongoDB connection error:', error.message);
+    throw new Error('Database connection failed');
   }
 }
-
 
 // Validation functions
 function validateLoginInput(payload) {
@@ -57,6 +68,11 @@ function validateRegistrationInput(payload) {
 
 // Lambda handler
 export const handler = async (event) => {
+  // Handle OPTIONS request for CORS
+  if (event.httpMethod === 'OPTIONS') {
+    return formatResponse(200, {});
+  }
+
   try {
     let parsedBody;
 
@@ -64,18 +80,12 @@ export const handler = async (event) => {
     try {
       parsedBody = JSON.parse(event.body);
     } catch (error) {
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: 'Internal server error' }),
-      };
+      return formatResponse(500, { error: 'Invalid request body' });
     }
 
     // Validate basic request structure
     if (!parsedBody.action || !parsedBody.payload) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: 'Invalid action' }),
-      };
+      return formatResponse(400, { error: 'Invalid request format - missing action or payload' });
     }
 
     // Connect to database before any operations
@@ -86,10 +96,7 @@ export const handler = async (event) => {
       }
     } catch (error) {
       console.error('Database connection error:', error.message);
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: 'Internal server error' }),
-      };
+      return formatResponse(500, { error: 'Database connection failed' });
     }
 
     const { action, payload } = parsedBody;
@@ -97,34 +104,22 @@ export const handler = async (event) => {
     switch (action) {
       case 'register':
         if (!validateRegistrationInput(payload)) {
-          return {
-            statusCode: 400,
-            body: JSON.stringify({ error: 'Missing required fields' }),
-          };
+          return formatResponse(400, { error: 'Missing required registration fields' });
         }
         return await handleRegister(payload);
 
       case 'login':
         if (!validateLoginInput(payload)) {
-          return {
-            statusCode: 400,
-            body: JSON.stringify({ error: 'Missing required fields' }),
-          };
+          return formatResponse(400, { error: 'Missing required login fields' });
         }
         return await handleLogin(payload);
 
       default:
-        return {
-          statusCode: 400,
-          body: JSON.stringify({ error: 'Invalid action' }),
-        };
+        return formatResponse(400, { error: 'Invalid action specified' });
     }
   } catch (error) {
     console.error('Error:', error.message);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: 'Internal server error' }),
-    };
+    return formatResponse(500, { error: 'Internal server error' });
   }
 };
 
@@ -132,10 +127,7 @@ async function handleRegister({ email, password, name }) {
   try {
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: 'Email already registered' }),
-      };
+      return formatResponse(400, { error: 'Email already registered' });
     }
 
     const user = new User({ email, password, name });
@@ -147,23 +139,17 @@ async function handleRegister({ email, password, name }) {
       { expiresIn: '24h' }
     );
 
-    return {
-      statusCode: 201,
-      body: JSON.stringify({
-        token,
-        user: {
-          id: user._id,
-          email: user.email,
-          name: user.name,
-        },
-      }),
-    };
+    return formatResponse(201, {
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+      }
+    });
   } catch (error) {
     console.error('Registration error:', error.message);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: 'Registration failed' }),
-    };
+    return formatResponse(500, { error: 'Registration failed' });
   }
 }
 
@@ -171,18 +157,12 @@ async function handleLogin({ email, password }) {
   try {
     const user = await User.findOne({ email });
     if (!user) {
-      return {
-        statusCode: 401,
-        body: JSON.stringify({ error: 'Invalid credentials' }),
-      };
+      return formatResponse(401, { error: 'Invalid credentials' });
     }
 
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
-      return {
-        statusCode: 401,
-        body: JSON.stringify({ error: 'Invalid credentials' }),
-      };
+      return formatResponse(401, { error: 'Invalid credentials' });
     }
 
     const token = jwt.sign(
@@ -191,22 +171,16 @@ async function handleLogin({ email, password }) {
       { expiresIn: '24h' }
     );
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        token,
-        user: {
-          id: user._id,
-          email: user.email,
-          name: user.name,
-        },
-      }),
-    };
+    return formatResponse(200, {
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+      }
+    });
   } catch (error) {
     console.error('Login error:', error.message);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: 'Login failed' }),
-    };
+    return formatResponse(500, { error: 'Login failed' });
   }
 }
