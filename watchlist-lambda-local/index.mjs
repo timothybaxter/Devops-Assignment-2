@@ -49,26 +49,22 @@ export const handler = async (event) => {
         return {
           statusCode: 200,
           headers,
-          body: JSON.stringify({ videos: [] })
+          body: JSON.stringify([])
         };
       }
 
-      // Fetch video details for watchlist
-      const videos = await db.collection('videos')
-        .find({ _id: { $in: watchlist.videos.map(id => new ObjectId(id)) } })
-        .toArray();
-
+      // Return array of videoIds
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify(videos)
+        body: JSON.stringify(watchlist.videos || [])
       };
     }
 
-    // POST request - add to watchlist
+    // POST request - add/remove from watchlist
     if (event.httpMethod === 'POST') {
       const body = JSON.parse(event.body);
-      const { userId, videoId } = body;
+      const { userId, videoId, action } = body;
 
       if (!userId || !videoId) {
         return {
@@ -78,19 +74,31 @@ export const handler = async (event) => {
         };
       }
 
-      await watchlistsCollection.updateOne(
-        { userId },
-        {
-          $addToSet: { videos: videoId },
-          $setOnInsert: { createdAt: new Date() }
-        },
-        { upsert: true }
-      );
+      if (action === 'remove') {
+        await watchlistsCollection.updateOne(
+          { userId },
+          {
+            $pull: { videos: videoId }
+          }
+        );
+      } else {
+        await watchlistsCollection.updateOne(
+          { userId },
+          {
+            $addToSet: { videos: videoId },
+            $setOnInsert: { createdAt: new Date() }
+          },
+          { upsert: true }
+        );
+      }
 
+      // Get updated watchlist
+      const updatedWatchlist = await watchlistsCollection.findOne({ userId });
+      
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify({ message: 'Watchlist updated successfully' })
+        body: JSON.stringify(updatedWatchlist?.videos || [])
       };
     }
 
