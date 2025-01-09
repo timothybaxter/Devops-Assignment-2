@@ -2,8 +2,14 @@ import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
-const MONGODB_URI = process.env.MONGODB_URI;
-const JWT_SECRET = process.env.JWT_SECRET;
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONGODB_URI);
+  } catch (error) {
+    console.error('MongoDB connection error:', error);
+    throw error;
+  }
+};
 
 const userSchema = new mongoose.Schema({
   email: String,
@@ -11,9 +17,16 @@ const userSchema = new mongoose.Schema({
   name: String
 });
 
-const User = mongoose.model('User', userSchema);
+let User;
+try {
+  User = mongoose.model('User');
+} catch {
+  User = mongoose.model('User', userSchema);
+}
 
 export const handler = async (event) => {
+  console.log('Received event:', JSON.stringify(event));
+
   const headers = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -21,15 +34,13 @@ export const handler = async (event) => {
     'Content-Type': 'application/json'
   };
 
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers, body: '' };
-  }
-
   try {
-    console.log('Event:', event);
-    console.log('Event body:', event.body);
+    if (event.httpMethod === 'OPTIONS') {
+      return { statusCode: 200, headers, body: '' };
+    }
 
     if (!event.body) {
+      console.error('No request body received');
       return {
         statusCode: 400,
         headers,
@@ -37,10 +48,10 @@ export const handler = async (event) => {
       };
     }
 
-    const { action, payload } = JSON.parse(event.body);
-    console.log('Parsed payload:', payload);
+    const parsedBody = JSON.parse(event.body);
+    console.log('Parsed body:', parsedBody);
 
-    if (!action || !payload) {
+    if (!parsedBody.action || !parsedBody.payload) {
       return {
         statusCode: 400,
         headers,
@@ -48,11 +59,13 @@ export const handler = async (event) => {
       };
     }
 
-    await mongoose.connect(process.env.MONGODB_URI);
+    await connectDB();
+
+    const { action, payload } = parsedBody;
 
     if (action === 'register') {
       const { email, password, name } = payload;
-      
+
       if (!email || !password || !name) {
         return {
           statusCode: 400,
@@ -87,47 +100,7 @@ export const handler = async (event) => {
       };
     }
 
-    if (action === 'login') {
-      const { email, password } = payload;
-      
-      if (!email || !password) {
-        return {
-          statusCode: 400,
-          headers,
-          body: JSON.stringify({ error: 'Missing credentials' })
-        };
-      }
-
-      const user = await User.findOne({ email });
-      if (!user) {
-        return {
-          statusCode: 401,
-          headers,
-          body: JSON.stringify({ error: 'Invalid credentials' })
-        };
-      }
-
-      const isValidPassword = await bcrypt.compare(password, user.password);
-      if (!isValidPassword) {
-        return {
-          statusCode: 401,
-          headers,
-          body: JSON.stringify({ error: 'Invalid credentials' })
-        };
-      }
-
-      const token = jwt.sign(
-        { userId: user._id, email: user.email },
-        process.env.JWT_SECRET,
-        { expiresIn: '24h' }
-      );
-
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({ token })
-      };
-    }
+    // Add login handling code here
 
     return {
       statusCode: 400,
@@ -140,7 +113,7 @@ export const handler = async (event) => {
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: 'Internal server error' })
+      body: JSON.stringify({ error: 'Internal server error', details: error.message })
     };
   } finally {
     if (mongoose.connection.readyState === 1) {
