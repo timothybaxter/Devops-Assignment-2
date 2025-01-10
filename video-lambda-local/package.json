@@ -1,19 +1,17 @@
 {
   "name": "video-lambda-local",
   "version": "1.0.0",
-  "main": "index.mjs",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.470.0",
-    "@aws-sdk/s3-request-presigner": "^3.470.0",
-    "mongodb": "^6.12.0",
-    "get-video-duration": "^4.1.0"
+    "@aws-sdk/client-s3": "^3.496.0",
+    "@aws-sdk/client-ec2": "^3.496.0",
+    "@aws-sdk/s3-request-presigner": "^3.496.0",
+    "mongodb": "^6.3.0"
+  },
+  "devDependencies": {
+    "vitest": "^1.1.0"
   }
 }
