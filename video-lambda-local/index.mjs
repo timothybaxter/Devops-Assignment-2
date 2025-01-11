@@ -2,7 +2,12 @@ import { MongoClient } from 'mongodb';
 import { S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { EC2Client, DescribeInstancesCommand, ModifyInstanceAttributeCommand, StopInstancesCommand, StartInstancesCommand } from '@aws-sdk/client-ec2';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import ffmpeg from 'fluent-ffmpeg';
+let ffmpeg;
+try {
+  ffmpeg = (await import('fluent-ffmpeg')).default;
+} catch (error) {
+  console.error('Error importing fluent-ffmpeg:', error);
+}
 import fs from 'fs';
 
 const MONGODB_URI = process.env.MONGODB_URI;
