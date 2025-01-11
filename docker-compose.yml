@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  auth-service:
+    build:
+      context: ./auth-lambda-local
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+      - JWT_SECRET=${JWT_SECRET}
+    volumes:
+      - ./auth-lambda-local:/usr/src/app
+      - /usr/src/app/node_modules
+    depends_on:
+      - mongodb
+
+  video-service:
+    build:
+      context: ./video-lambda-local
+      dockerfile: Dockerfile
+    ports:
+      - "3002:3002"
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - EC2_INSTANCE_ID=${EC2_INSTANCE_ID}
+    volumes:
+      - ./video-lambda-local:/usr/src/app
+      - /usr/src/app/node_modules
+    depends_on:
+      - mongodb
+
+  watchlist-service:
+    build:
+      context: ./watchlist-lambda-local
+      dockerfile: Dockerfile
+    ports:
+      - "3003:3003"
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+    volumes:
+      - ./watchlist-lambda-local:/usr/src/app
+      - /usr/src/app/node_modules
+    depends_on:
+      - mongodb
+
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+volumes:
+  mongodb_data:

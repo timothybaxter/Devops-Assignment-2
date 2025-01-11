@@ -9,7 +9,9 @@
     "@aws-sdk/client-s3": "^3.496.0",
     "@aws-sdk/client-ec2": "^3.496.0",
     "@aws-sdk/s3-request-presigner": "^3.496.0",
-    "mongodb": "^6.3.0"
+    "mongodb": "^6.3.0",
+    "express": "^4.18.2"
+
   },
   "devDependencies": {
     "vitest": "^1.1.0"
