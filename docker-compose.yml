@@ -24,9 +24,6 @@ services:
       - "3002:3002"
     environment:
       - MONGODB_URI=${MONGODB_URI}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - EC2_INSTANCE_ID=${EC2_INSTANCE_ID}
     volumes:
       - ./video-lambda-local:/usr/src/app
       - /usr/src/app/node_modules
