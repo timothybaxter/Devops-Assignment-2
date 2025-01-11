@@ -10,6 +10,7 @@ try {
 }
 import fs from 'fs';
 
+console.log("testing pipeline");
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'videos-db';
 const EC2_INSTANCE_ID = process.env.EC2_INSTANCE_ID;
