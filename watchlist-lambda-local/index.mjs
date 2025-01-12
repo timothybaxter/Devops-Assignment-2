@@ -4,7 +4,7 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'watchlist-db'; 
 let cachedDb = null;
 
-console.log("Demo Purposes")
+console.log("Demo")
 const headers = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
