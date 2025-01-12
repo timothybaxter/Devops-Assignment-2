@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
-console.log("Pipeline test");
+console.log("Pipeline test final day");
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
