@@ -1,9 +1,10 @@
 import { MongoClient, ObjectId } from 'mongodb';
 
 const MONGODB_URI = process.env.MONGODB_URI;
-const DB_NAME = 'watchlist-db';  // Changed from 'videos-db' to 'watchlist-db'
+const DB_NAME = 'watchlist-db'; 
 let cachedDb = null;
 
+console.log("Demo Purposes");
 const headers = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -14,7 +15,7 @@ const headers = {
 async function connectToDatabase() {
   if (cachedDb) return cachedDb;
   const client = await MongoClient.connect(MONGODB_URI);
-  cachedDb = client.db(DB_NAME);  // Connect to watchlist-db
+  cachedDb = client.db(DB_NAME);  
   return cachedDb;
 }
 
@@ -31,9 +32,9 @@ export const handler = async (event) => {
 
   try {
     const db = await connectToDatabase();
-    const watchlistsCollection = db.collection('watchlists');  // Use watchlists collection
+    const watchlistsCollection = db.collection('watchlists');  
 
-    // GET request - retrieve watchlist
+   
     if (event.httpMethod === 'GET') {
       const userId = event.queryStringParameters?.userId;
       if (!userId) {
